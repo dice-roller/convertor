@@ -161,7 +161,7 @@ describe("legacy to v1 basic pools", () => {
     );
   });
 
-  it.each(["4d6kh3", "2d6+2", "{d6,d8}"])(
+  it.each(["2d6+2", "{d6,d8}"])(
     "explicitly rejects notation not implemented yet: %s",
     (notation) => {
       expect(() =>
@@ -169,4 +169,177 @@ describe("legacy to v1 basic pools", () => {
       ).toThrow(ConversionError);
     },
   );
+});
+
+describe("legacy to v1 pool modifiers", () => {
+  it.each([
+    "4d6kh3",
+    "4d6kl2",
+    "4d6dh1",
+    "4d6dl1",
+    "4d6sa",
+    "4d6sd",
+    "4d6min7",
+    "4d6max0",
+    "4d6min2.5",
+    "4d6max3.5",
+    "4d6>=4f<=2",
+    "4d6cs>=4cf<=2",
+    "4d6ro<3",
+    "4d6r<3",
+    "4d6u",
+    "4d6uo",
+    "4d6!",
+    "4d6!!",
+    "4d6!p",
+    "4d6!!p",
+    "4d6!kh3sd",
+    "4d6min3max4kh2>=4",
+  ])("preserves the finished results of %s", (notation) => {
+    const source = legacyRoll(notation);
+    const before = structuredClone(source);
+    const converted = fromLegacy(source, 1);
+
+    if (converted.type !== "roll" || converted.result.type !== "pool") {
+      throw new Error("Expected a pool");
+    }
+
+    expect(converted.total).toBe(source.total);
+    expect(converted.minTotal).toBe(source.minTotal);
+    expect(converted.maxTotal).toBe(source.maxTotal);
+    expect(converted.averageTotal).toBe(source.averageTotal);
+    expect(converted.result.rolls).toEqual(
+      poolOf(source).rolls.map((die) => ({
+        type: "die",
+        initialValue: die.initialValue,
+        value: die.value,
+        calculationValue: die.calculationValue,
+        useInTotal: die.useInTotal,
+        flags: die.modifiers,
+      })),
+    );
+    expect(Roll.import(converted).export()).toEqual(converted);
+    expect(source).toEqual(before);
+  });
+
+  it.each([
+    {
+      notation: "d6!",
+      values: [6, 6, 2],
+      initialValues: [6, 6, 2],
+      flags: [["explode"], ["explode"], []],
+    },
+    {
+      notation: "d6!!",
+      values: [14],
+      initialValues: [6],
+      flags: [["explode", "compound"]],
+    },
+    {
+      notation: "d6!p",
+      values: [6, 5, 0],
+      initialValues: [6, 6, 1],
+      flags: [["explode", "penetrate"], ["explode", "penetrate"], []],
+    },
+    {
+      notation: "d6!!p",
+      values: [11],
+      initialValues: [6],
+      flags: [["explode", "compound", "penetrate"]],
+    },
+    {
+      notation: "d6r=1",
+      values: [5],
+      initialValues: [1],
+      flags: [["re-roll"]],
+    },
+    {
+      notation: "d6ro=1",
+      values: [1],
+      initialValues: [1],
+      flags: [["re-roll-once"]],
+    },
+  ])(
+    "preserves explicit finished outcomes for $notation",
+    ({ notation, values, initialValues, flags }) => {
+      const source = legacyRoll(notation);
+      const total = values.reduce((sum, value) => sum + value, 0);
+      const pool = poolOf(source);
+      const fixture = {
+        ...source,
+        total,
+        rolls: [
+          {
+            ...pool,
+            value: total,
+            rolls: values.map((value, index) => ({
+              type: "result",
+              value,
+              initialValue: initialValues[index],
+              calculationValue: value,
+              useInTotal: true,
+              modifiers: flags[index],
+              modifierFlags: "",
+            })),
+          },
+        ],
+      };
+
+      const result = fromLegacy(fixture, 1);
+      if (result.type !== "roll" || result.result.type !== "pool") {
+        throw new Error("Expected a pool");
+      }
+
+      expect(result.total).toBe(total);
+      expect(result.result.rolls.map((die) => die.value)).toEqual(values);
+      expect(result.result.rolls.map((die) => die.initialValue)).toEqual(
+        initialValues,
+      );
+      expect(result.result.rolls.map((die) => die.flags)).toEqual(flags);
+    },
+  );
+
+  it("rejects unknown flags instead of silently losing them", () => {
+    const source = legacyRoll("d6sa");
+    const pool = poolOf(source);
+    const modified = {
+      ...source,
+      rolls: [
+        {
+          ...pool,
+          rolls: pool.rolls.map((die) => ({ ...die, modifiers: ["unknown"] })),
+        },
+      ],
+    };
+    expect(() => fromLegacy(modified, 1, { strict: false })).toThrow(
+      /Unknown legacy modifier flag/,
+    );
+  });
+
+  it("rejects a missing exploding die", () => {
+    const source = legacyRoll("d6!");
+    const pool = poolOf(source);
+    const modified = {
+      ...source,
+      rolls: [
+        {
+          ...pool,
+          rolls: [
+            {
+              type: "result",
+              value: 6,
+              initialValue: 6,
+              calculationValue: 6,
+              useInTotal: true,
+              modifiers: ["explode"],
+              modifierFlags: "!",
+            },
+          ],
+        },
+      ],
+    };
+    expect(() => fromLegacy(modified, 1, { strict: false })).toThrow(
+      /dice count/,
+    );
+  });
 });
