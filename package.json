@@ -1,6 +1,6 @@
 {
   "name": "@dice-roller/convertor",
-  "version": "0.1.0",
+  "version": "1.0.0-alpha.0",
   "description": "Convert exported RPG Dice Roller data between schema versions.",
   "author": "GreenImp Media <info@greenimp.co.uk> (https://greenimp.co.uk)",
   "license": "MIT",
