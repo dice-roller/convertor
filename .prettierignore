@@ -1,0 +1,4 @@
+/coverage
+/dist
+/.github
+package-lock.json
