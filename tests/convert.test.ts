@@ -102,7 +102,9 @@ describe("convert", () => {
     expect(() => convert(legacy, "legacy", { format: "concise" })).toThrow(
       UnsupportedFormatError,
     );
-    expect(() => convert(current, 1, { format: "concise" })).toThrow(
+    const roller = new Roller();
+    roller.import(current);
+    expect(() => convert(roller.export(), 1, { format: "concise" })).toThrow(
       UnsupportedFormatError,
     );
   });

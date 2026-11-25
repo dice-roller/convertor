@@ -10,6 +10,7 @@ import {
   UnsupportedFormatError,
   VersionDetectionError,
 } from "./errors.js";
+import { toConcise } from "./formats/concise.js";
 import { prepareSource } from "./formats/normalise.js";
 import type { FullData } from "./formats/normalise.js";
 import type {
@@ -85,9 +86,13 @@ export function convertWithRegistry(
       );
     }
 
-    throw new UnsupportedFormatError(
-      "Converting full exports to concise data is not implemented yet",
-    );
+    if (full.type !== "roll") {
+      throw new UnsupportedFormatError(
+        "Concise output requires an individual v1 roll",
+      );
+    }
+
+    return encodeOutput(toConcise(full), target, options.encoding ?? "object");
   }
 
   return encodeOutput(full, target, options.encoding ?? "object");
