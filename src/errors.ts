@@ -17,3 +17,6 @@ export class UnsupportedVersionError extends ConversionError {}
 
 /** No registered migration path connects the requested schemas. */
 export class ConversionPathError extends ConversionError {}
+
+/** The requested output encoding is unsupported or serialisation failed. */
+export class OutputEncodingError extends ConversionError {}

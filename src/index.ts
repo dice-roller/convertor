@@ -3,6 +3,7 @@ export {
   ConversionError,
   ConversionPathError,
   InvalidInputError,
+  OutputEncodingError,
   UnsupportedVersionError,
   VersionDetectionError,
 } from "./errors.js";

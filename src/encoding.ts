@@ -1,4 +1,5 @@
-import { InvalidInputError } from "./errors.js";
+import { InvalidInputError, OutputEncodingError } from "./errors.js";
+import type { DataEncoding, SupportedDataVersion } from "./types.js";
 
 /** A decoded export envelope. Its contents have not yet been validated. */
 export type InputData = Readonly<Record<string, unknown>>;
@@ -80,4 +81,76 @@ export function decodeInput(input: unknown): InputData {
   }
 
   return data;
+}
+
+/** Escape non-ASCII UTF-16 code units, including both halves of surrogate pairs. */
+function escapeNonAscii(text: string): string {
+  return text.replace(
+    /[\u0080-\uFFFF]/g,
+    (character) =>
+      "\\u" + character.charCodeAt(0).toString(16).padStart(4, "0"),
+  );
+}
+
+/** Encode UTF-8 bytes in chunks to avoid engine argument count limits. */
+function toBase64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+
+  return btoa(binary);
+}
+
+/**
+ * Encode prepared, JSON-safe schema data without changing its structure.
+ * Schema-specific normalisation (including number tags) precedes this step.
+ * Legacy Base64 uses ASCII-only JSON so v5's atob/JSON.parse can read Unicode.
+ */
+export function encodeOutput<T extends object>(
+  data: T,
+  version: SupportedDataVersion,
+  encoding?: "object",
+): T;
+export function encodeOutput(
+  data: object,
+  version: SupportedDataVersion,
+  encoding: "json" | "base64",
+): string;
+export function encodeOutput<T extends object>(
+  data: T,
+  version: SupportedDataVersion,
+  encoding: DataEncoding,
+): T | string;
+export function encodeOutput<T extends object>(
+  data: T,
+  version: SupportedDataVersion,
+  encoding: DataEncoding = "object",
+): T | string {
+  if (encoding === "object") {
+    return data;
+  }
+
+  if (encoding !== "json" && encoding !== "base64") {
+    throw new OutputEncodingError("Unsupported output encoding");
+  }
+
+  let json: string;
+
+  try {
+    json = JSON.stringify(data);
+    if (typeof json !== "string") {
+      throw new TypeError("Expected serialisable data");
+    }
+  } catch (cause) {
+    throw new OutputEncodingError("Cannot serialise output data", { cause });
+  }
+
+  if (encoding === "json") {
+    return json;
+  }
+
+  return toBase64(version === "legacy" ? escapeNonAscii(json) : json);
 }
