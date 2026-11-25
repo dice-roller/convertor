@@ -1,3 +1,9 @@
+export {
+  getSupportedVersions,
+  getSupportedTargetVersions,
+  getSupportedFormats,
+  supportedEncodings,
+} from "./capabilities.js";
 export { convert } from "./convert.js";
 export { detectVersion } from "./detectVersion.js";
 export { fromLegacy } from "./fromLegacy.js";

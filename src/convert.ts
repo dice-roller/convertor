@@ -1,3 +1,4 @@
+import { getSupportedFormats } from "./capabilities.js";
 import { conversionRegistry } from "./conversions/registry.js";
 import type {
   ConversionRegistry,
@@ -47,7 +48,7 @@ export function convertWithRegistry(
   const source = path[0]?.from ?? target;
   const format = options.format ?? "full";
 
-  if (format !== "full" && (format !== "concise" || target === "legacy")) {
+  if (!getSupportedFormats(target).includes(format)) {
     throw new UnsupportedFormatError(
       `Unsupported output format ${String(format)} for version ${String(target)}`,
     );

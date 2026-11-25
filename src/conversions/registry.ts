@@ -60,6 +60,11 @@ export class ConversionRegistry<
     }
   }
 
+  /** Return the registered schemas without exposing mutable registry state. */
+  getVersions(): readonly Version[] {
+    return [...this.versions];
+  }
+
   private requireVersion(
     version: DataVersion,
     role: "source" | "target",

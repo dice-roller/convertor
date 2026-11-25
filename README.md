@@ -47,6 +47,32 @@ The destination is always required. Data versions describe the export schema, **
 
 Use an explicit version for reproducible migrations. Opt in to `"latest"` if you want to use the newest supported schema when upgrading the convertor. Reverse migrations to legacy are not currently supported.
 
+### Discovering conversion capabilities
+
+Applications can build their own conversion controls using the public runtime metadata:
+
+```typescript
+import {
+  getSupportedVersions,
+  getSupportedTargetVersions,
+  getSupportedFormats,
+  supportedEncodings,
+} from "@dice-roller/convertor";
+
+getSupportedVersions(); // ["legacy", 1]
+getSupportedTargetVersions("legacy"); // ["legacy", 1]
+getSupportedTargetVersions(1); // [1]
+getSupportedFormats("latest"); // ["full", "concise"]
+supportedEncodings; // ["object", "json", "base64"]
+```
+
+Target versions include same-schema re-encoding. Omitting the source returns
+all registered schemas; an explicit source restricts the list to reachable
+targets. The `"latest"` alias can be used separately as a destination.
+Supported formats describe the target schema, not the validity of individual
+inputs (for example, histories cannot be converted to concise output).
+Unsupported source or target versions throw `UnsupportedVersionError`.
+
 ### Options
 
 ```typescript
