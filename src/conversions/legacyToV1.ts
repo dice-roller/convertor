@@ -1,9 +1,8 @@
-import { Parser, Roll } from "@dice-roller/rpg-dice-roller";
+import { ast, Parser, Roll } from "@dice-roller/rpg-dice-roller";
 import type {
   ConciseDieResult,
   EncodedRollData,
   results,
-  ast,
   EncodedNumber,
   ExpressionNode,
 } from "@dice-roller/rpg-dice-roller";
@@ -194,17 +193,65 @@ class ExpressionMatcher {
   }
 }
 
+/** v5 computed parameters contain only numeric arithmetic, never another pool. */
+function isNumericExpression(node: ExpressionNode): boolean {
+  switch (node.type) {
+    case "number":
+      return true;
+    case "binary":
+      return isNumericExpression(node.left) && isNumericExpression(node.right);
+    case "unary":
+      return isNumericExpression(node.operand);
+    case "paren":
+      return isNumericExpression(node.expression);
+    default:
+      return false;
+  }
+}
+
+function parameter(node: ExpressionNode, path: string): number {
+  if (!isNumericExpression(node)) {
+    fail(
+      path,
+      "Legacy calculated parameters must contain only numeric arithmetic",
+    );
+  }
+  let value: number;
+  try {
+    value =
+      node.type === "number"
+        ? node.value
+        : Roll.import({
+            notation: ast.nodeToNotation(node),
+            rolls: [],
+          }).result.value;
+  } catch (cause) {
+    throw new ConversionError(
+      `${path}: Cannot evaluate legacy dice parameter`,
+      { cause },
+    );
+  }
+  // v5 sometimes coerced fractional quantities or defaulted zero to one.
+  // v6 preserves computed expressions but cannot represent those coercions
+  // without changing the notation or the evaluated AST.
+  if (!Number.isSafeInteger(value) || value < 1) {
+    fail(path, "Legacy dice parameter is not a positive safe integer");
+  }
+  return value;
+}
+
 function convertPool(
   node: ast.PoolNode,
   pool: LegacyRollResults,
   path: string,
 ): readonly ConciseDieResult[] {
-  if (
-    node.qty.type !== "number" ||
-    !["standard", "percentile", "fudge"].includes(node.die.name) ||
-    node.die.args.some((arg) => arg.type !== "number")
-  ) {
-    fail(path, "Only basic dice quantities and sides are supported so far");
+  if (!["standard", "percentile", "fudge"].includes(node.die.name)) {
+    fail(path, "Unsupported legacy die type");
+  }
+
+  const qty = parameter(node.qty, `${path}.qty`);
+  for (const [index, arg] of node.die.args.entries()) {
+    parameter(arg, `${path}.die.args[${index}]`);
   }
 
   const explode = node.modifiers.find(
@@ -219,7 +266,7 @@ function convertPool(
       ? pool.rolls.filter((die) => die.modifiers.includes("explode")).length
       : 0;
 
-  if (pool.rolls.length !== node.qty.value + extras) {
+  if (pool.rolls.length !== qty + extras) {
     fail(`${path}.rolls`, "Stored dice count does not match notation");
   }
 
@@ -326,7 +373,12 @@ function convertRoll(
   }
   checkTotal(data.total, roll.total, `${path}.total`, context);
 
-  if (node.type !== "pool" || node.modifiers.length > 0) {
+  if (
+    node.type !== "pool" ||
+    node.modifiers.length > 0 ||
+    node.qty.type !== "number" ||
+    node.die.args.some((arg) => arg.type !== "number")
+  ) {
     // v5 and v6 can calculate different statistics for modifiers and maths.
     // Preserve the original finite statistics, without running modifiers again.
     return Roll.import({
