@@ -3,11 +3,15 @@ import type {
   ConciseDieResult,
   EncodedRollData,
   results,
+  ast,
+  EncodedNumber,
   ExpressionNode,
 } from "@dice-roller/rpg-dice-roller";
 import { ConversionError } from "../errors.js";
 import type {
   LegacyDieResult,
+  LegacyExpressionItem,
+  LegacyRollResults,
   LegacyRollData,
   LegacyNumber,
 } from "../formats/legacy.js";
@@ -23,6 +27,9 @@ function checkTotal(
   path: string,
   context: ConversionContext,
 ): void {
+  if (actual === null && !Number.isFinite(expected)) {
+    return;
+  }
   if (actual !== expected) {
     context.warn({
       code: "total-mismatch",
@@ -83,7 +90,15 @@ function convertDie(die: LegacyDieResult, path: string): ConciseDieResult {
   return { initialValue, value, calculationValue, useInTotal, flags };
 }
 
-function storedStatistic(value: LegacyNumber, path: string): number {
+function storedStatistic(
+  value: LegacyNumber,
+  path: string,
+  inferred?: () => number,
+): number {
+  if (value === null && inferred) {
+    const candidate = inferred();
+    if (!Number.isFinite(candidate)) return candidate;
+  }
   if (value === null || !Number.isFinite(value)) {
     fail(path, "Cannot recover a non-finite legacy statistic from null");
   }
@@ -91,42 +106,105 @@ function storedStatistic(value: LegacyNumber, path: string): number {
   return value;
 }
 
-/** Reconstruct a finished pool using v6's concise import. */
-function convertRoll(
-  data: LegacyRollData,
-  context: ConversionContext,
-  path: string,
-): EncodedRollData {
-  let node: ExpressionNode;
+interface MatchedPool {
+  readonly node: ast.PoolNode;
+  readonly pool: LegacyRollResults;
+  readonly path: string;
+  readonly values: readonly ConciseDieResult[];
+}
 
-  try {
-    node = new Parser().parse(data.notation);
-  } catch (cause) {
-    throw new ConversionError(
-      `${path}.notation: Cannot parse legacy notation`,
-      {
-        cause,
-      },
-    );
+/** v5 stores infix tokens, whereas v6 stores a tree. Match the original
+ * token stream in notation order before handing finished dice to v6.
+ */
+class ExpressionMatcher {
+  private index = 0;
+  readonly pools: MatchedPool[] = [];
+
+  constructor(
+    private readonly tokens: readonly LegacyExpressionItem[],
+    private readonly path: string,
+  ) {}
+
+  private consume(expected: number | string): void {
+    if (this.tokens[this.index] !== expected) {
+      fail(
+        `${this.path}[${this.index}]`,
+        `Expected legacy expression token ${String(expected)}`,
+      );
+    }
+
+    this.index++;
   }
 
+  match(node: ExpressionNode, negative = false): void {
+    switch (node.type) {
+      case "number":
+        this.consume(negative ? -node.value : node.value);
+        return;
+      case "binary":
+        this.match(node.left, negative);
+        this.consume(node.op);
+        this.match(node.right);
+        return;
+      case "unary":
+        this.match(node.operand, true);
+        return;
+      case "paren":
+        this.consume("(");
+        this.match(node.expression);
+        this.consume(")");
+        return;
+      case "function":
+        this.consume(`${node.name}(`);
+        for (const [index, arg] of node.args.entries()) {
+          if (index > 0) this.consume(",");
+          this.match(arg);
+        }
+        this.consume(")");
+        return;
+      case "pool": {
+        const path = `${this.path}[${this.index}]`;
+        const pool = this.tokens[this.index++];
+        if (
+          typeof pool !== "object" ||
+          pool === null ||
+          pool.type !== "roll-results"
+        ) {
+          fail(path, "Expected a legacy dice pool");
+        }
+        this.pools.push({
+          node,
+          pool,
+          path,
+          values: convertPool(node, pool, path),
+        });
+        return;
+      }
+      default:
+        fail(this.path, `Unsupported legacy expression type: ${node.type}`);
+    }
+  }
+
+  finish(node: ExpressionNode): readonly MatchedPool[] {
+    this.match(node);
+    if (this.index !== this.tokens.length) {
+      fail(`${this.path}[${this.index}]`, "Unused legacy expression results");
+    }
+    return this.pools;
+  }
+}
+
+function convertPool(
+  node: ast.PoolNode,
+  pool: LegacyRollResults,
+  path: string,
+): readonly ConciseDieResult[] {
   if (
-    node.type !== "pool" ||
     node.qty.type !== "number" ||
     !["standard", "percentile", "fudge"].includes(node.die.name) ||
     node.die.args.some((arg) => arg.type !== "number")
   ) {
-    fail(`${path}.notation`, "Only basic dice pools are supported so far");
-  }
-
-  const pool = data.rolls[0];
-  if (
-    data.rolls.length !== 1 ||
-    typeof pool !== "object" ||
-    pool === null ||
-    pool.type !== "roll-results"
-  ) {
-    fail(`${path}.rolls`, "Expected exactly one legacy dice pool");
+    fail(path, "Only basic dice quantities and sides are supported so far");
   }
 
   const explode = node.modifiers.find(
@@ -142,11 +220,11 @@ function convertRoll(
       : 0;
 
   if (pool.rolls.length !== node.qty.value + extras) {
-    fail(`${path}.rolls[0].rolls`, "Stored dice count does not match notation");
+    fail(`${path}.rolls`, "Stored dice count does not match notation");
   }
 
-  const values = pool.rolls.map((die, index) => {
-    const diePath = `${path}.rolls[0].rolls[${index}]`;
+  return pool.rolls.map((die, index) => {
+    const diePath = `${path}.rolls[${index}]`;
 
     if (
       !modified &&
@@ -161,37 +239,95 @@ function convertRoll(
 
     return convertDie(die, diePath);
   });
+}
 
+function collectPools(result: results.ExpressionResult): results.PoolResult[] {
+  switch (result.type) {
+    case "pool":
+      return [result];
+    case "binary":
+      return [...collectPools(result.left), ...collectPools(result.right)];
+    case "unary":
+      return collectPools(result.operand);
+    case "paren":
+      return collectPools(result.inner);
+    case "function":
+      return result.args.flatMap(collectPools);
+    case "number":
+      return [];
+    default:
+      fail("data.rolls", `Unsupported reconstructed result: ${result.type}`);
+  }
+}
+
+function encodeNumber(value: number): EncodedNumber {
+  return Number.isFinite(value)
+    ? value
+    : {
+        $number: Number.isNaN(value)
+          ? "NaN"
+          : value > 0
+            ? "Infinity"
+            : "-Infinity",
+      };
+}
+
+/** Reconstruct a finished expression using v6's concise import. */
+function convertRoll(
+  data: LegacyRollData,
+  context: ConversionContext,
+  path: string,
+): EncodedRollData {
+  let node: ExpressionNode;
+
+  try {
+    node = new Parser().parse(data.notation);
+  } catch (cause) {
+    throw new ConversionError(
+      `${path}.notation: Cannot parse legacy notation`,
+      { cause },
+    );
+  }
+
+  const pools = new ExpressionMatcher(data.rolls, `${path}.rolls`).finish(node);
   let roll: Roll;
   try {
-    roll = Roll.import({ notation: data.notation, rolls: [values] });
+    roll = Roll.import({
+      notation: data.notation,
+      rolls: pools.map((pool) => pool.values),
+    });
   } catch (cause) {
     throw new ConversionError(`${path}: Cannot reconstruct legacy dice pool`, {
       cause,
     });
   }
 
-  if (roll.result.type !== "pool") {
-    fail(path, "Expected a reconstructed dice pool");
+  const restored = collectPools(roll.result);
+  if (restored.length !== pools.length) {
+    fail(
+      `${path}.rolls`,
+      "Reconstructed pool count does not match legacy data",
+    );
   }
+  for (const [index, source] of pools.entries()) {
+    const pool = restored[index];
+    if (!pool) fail(source.path, "Missing reconstructed pool");
 
-  const { min, max } = roll.result.die;
-  for (const [index, die] of roll.result.rolls.entries()) {
-    // Final values may be outside the natural die range (min/max, compound,
-    // or penetration). The initial value is always the actual original draw.
-    if (die.initialValue < min || die.initialValue > max) {
-      fail(
-        `${path}.rolls[0].rolls[${index}]`,
-        "Die value is outside its possible range",
-      );
+    const { min, max } = pool.die;
+    for (const [dieIndex, die] of pool.rolls.entries()) {
+      if (die.initialValue < min || die.initialValue > max) {
+        fail(
+          `${source.path}.rolls[${dieIndex}]`,
+          "Die value is outside its possible range",
+        );
+      }
     }
+    checkTotal(source.pool.value, pool.value, `${source.path}.value`, context);
   }
-
-  checkTotal(pool.value, roll.result.value, `${path}.rolls[0].value`, context);
   checkTotal(data.total, roll.total, `${path}.total`, context);
 
-  if (modified) {
-    // v5 and v6 can calculate different bounds for the same modifiers.
+  if (node.type !== "pool" || node.modifiers.length > 0) {
+    // v5 and v6 can calculate different statistics for modifiers and maths.
     // Preserve the original finite statistics, without running modifiers again.
     return Roll.import({
       type: "roll",
@@ -199,9 +335,27 @@ function convertRoll(
       notation: roll.notation,
       result: roll.result,
       total: roll.total,
-      minTotal: storedStatistic(data.minTotal, `${path}.minTotal`),
-      maxTotal: storedStatistic(data.maxTotal, `${path}.maxTotal`),
-      averageTotal: storedStatistic(data.averageTotal, `${path}.averageTotal`),
+      minTotal: storedStatistic(
+        data.minTotal,
+        `${path}.minTotal`,
+        pools.every(({ node }) => node.modifiers.length === 0)
+          ? () => roll.minTotal
+          : undefined,
+      ),
+      maxTotal: storedStatistic(
+        data.maxTotal,
+        `${path}.maxTotal`,
+        pools.every(({ node }) => node.modifiers.length === 0)
+          ? () => roll.maxTotal
+          : undefined,
+      ),
+      averageTotal: storedStatistic(
+        data.averageTotal,
+        `${path}.averageTotal`,
+        pools.every(({ node }) => node.modifiers.length === 0)
+          ? () => (roll.minTotal + roll.maxTotal) / 2
+          : undefined,
+      ),
     }).export();
   }
 
@@ -230,15 +384,15 @@ export const legacyToV1: ConversionStep<"legacy", 1> = {
       convertRoll(roll, context, `data.log[${index}]`),
     );
     const total = rolls.reduce((sum, roll) => {
-      if (typeof roll.total !== "number") {
-        fail("data.log", "Expected a finite roll total");
-      }
-
-      return sum + roll.total;
+      const value =
+        typeof roll.total === "number"
+          ? roll.total
+          : Number(roll.total.$number);
+      return sum + value;
     }, 0);
 
     checkTotal(data.total, total, "data.total", context);
 
-    return { type: "history", version: 1, rolls, total };
+    return { type: "history", version: 1, rolls, total: encodeNumber(total) };
   },
 };

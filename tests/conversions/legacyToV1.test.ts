@@ -161,7 +161,7 @@ describe("legacy to v1 basic pools", () => {
     );
   });
 
-  it.each(["2d6+2", "{d6,d8}"])(
+  it.each(["{d6,d8}", "(1+1)d6"])(
     "explicitly rejects notation not implemented yet: %s",
     (notation) => {
       expect(() =>
