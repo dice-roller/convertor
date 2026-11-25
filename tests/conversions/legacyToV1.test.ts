@@ -160,15 +160,6 @@ describe("legacy to v1 basic pools", () => {
       /outside its possible range/,
     );
   });
-
-  it.each(["{d6,d8}"])(
-    "explicitly rejects notation not implemented yet: %s",
-    (notation) => {
-      expect(() =>
-        fromLegacy(legacyRoll(notation), 1, { strict: false }),
-      ).toThrow(ConversionError);
-    },
-  );
 });
 
 describe("legacy to v1 pool modifiers", () => {

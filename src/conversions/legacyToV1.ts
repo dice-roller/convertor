@@ -1,20 +1,27 @@
 import { ast, Parser, Roll } from "@dice-roller/rpg-dice-roller";
 import type {
   ConciseDieResult,
+  ConciseGroupResult,
   EncodedRollData,
   results,
   EncodedNumber,
   ExpressionNode,
 } from "@dice-roller/rpg-dice-roller";
 import { ConversionError } from "../errors.js";
+import { sameData, matchPermutation } from "../formats/matching.js";
 import type {
   LegacyDieResult,
   LegacyExpressionItem,
+  LegacyResultGroup,
   LegacyRollResults,
   LegacyRollData,
   LegacyNumber,
 } from "../formats/legacy.js";
-import type { ConversionContext, ConversionStep } from "../types.js";
+import type {
+  ConversionContext,
+  ConversionStep,
+  ConversionWarning,
+} from "../types.js";
 
 function fail(path: string, message: string): never {
   throw new ConversionError(`${path}: ${message}`);
@@ -74,7 +81,15 @@ function convertDie(die: LegacyDieResult, path: string): ConciseDieResult {
     fail(path, "Expected finite die results and an integer initial value");
   }
 
-  const flags = die.modifiers.map((flag) => {
+  const flags = convertFlags(die.modifiers, path);
+  return { initialValue, value, calculationValue, useInTotal, flags };
+}
+
+function convertFlags(
+  modifiers: readonly string[],
+  path: string,
+): results.ResultFlag[] {
+  const flags = modifiers.map((flag) => {
     if (!isLegacyFlag(flag)) {
       fail(path, `Unknown legacy modifier flag: ${flag}`);
     }
@@ -86,7 +101,7 @@ function convertDie(die: LegacyDieResult, path: string): ConciseDieResult {
     fail(path, "Duplicate legacy modifier flags");
   }
 
-  return { initialValue, value, calculationValue, useInTotal, flags };
+  return flags;
 }
 
 function storedStatistic(
@@ -112,16 +127,63 @@ interface MatchedPool {
   readonly values: readonly ConciseDieResult[];
 }
 
+interface MatchedGroup {
+  readonly source: LegacyResultGroup;
+  readonly path: string;
+  readonly members: readonly LegacyResultGroup[];
+  readonly override: ConciseGroupResult;
+}
+
+function groupWrapper(
+  value: LegacyExpressionItem | undefined,
+  isRollGroup: boolean,
+  path: string,
+): LegacyResultGroup {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    value.type !== "result-group" ||
+    value.isRollGroup !== isRollGroup
+  ) {
+    fail(
+      path,
+      isRollGroup
+        ? "Expected a legacy roll group"
+        : "Expected a legacy group member",
+    );
+  }
+  return value;
+}
+
+function memberScore(
+  member: LegacyResultGroup,
+  path: string,
+): results.ScoredItem {
+  if (member.value === null || member.calculationValue === null) {
+    fail(path, "Cannot recover non-finite legacy group member scores");
+  }
+  return {
+    value: member.value,
+    calculationValue: member.calculationValue,
+    useInTotal: member.useInTotal,
+    flags: convertFlags(member.modifiers, path),
+  };
+}
+
 /** v5 stores infix tokens, whereas v6 stores a tree. Match the original
  * token stream in notation order before handing finished dice to v6.
  */
 class ExpressionMatcher {
   private index = 0;
   readonly pools: MatchedPool[] = [];
+  readonly groups: MatchedGroup[] = [];
+  readonly warnings: ConversionWarning[] = [];
 
   constructor(
     private readonly tokens: readonly LegacyExpressionItem[],
     private readonly path: string,
+    private readonly inheritedSort = false,
+    private readonly inheritedDrop = false,
   ) {}
 
   private consume(expected: number | string): void {
@@ -175,12 +237,135 @@ class ExpressionMatcher {
           node,
           pool,
           path,
-          values: convertPool(node, pool, path),
+          values: convertPool(node, pool, path, this.inheritedDrop),
         });
         return;
       }
+      case "group":
+        this.matchGroup(node);
+        return;
       default:
         fail(this.path, `Unsupported legacy expression type: ${node.type}`);
+    }
+  }
+
+  private matchGroup(node: ast.GroupNode): void {
+    const path = `${this.path}[${this.index}]`;
+    const source = groupWrapper(this.tokens[this.index++], true, path);
+    if (source.results.length !== node.expressions.length) {
+      fail(path, "Stored group member count does not match notation");
+    }
+    if (
+      !source.useInTotal ||
+      source.modifiers.length ||
+      source.value !== source.calculationValue
+    ) {
+      fail(path, "Unexpected scoring on the outer legacy group");
+    }
+    const sorted =
+      this.inheritedSort ||
+      node.modifiers.some((modifier) => modifier.name === "sort");
+    const flattened =
+      node.expressions.length === 1 &&
+      node.modifiers.some(
+        (modifier) => modifier.name === "keep" || modifier.name === "drop",
+      );
+    const members = source.results.map((item, index) =>
+      groupWrapper(item, false, `${path}.results[${index}]`),
+    );
+    const candidates = node.expressions.map((child, sourceIndex) =>
+      members.map((member, storedIndex) => {
+        if (!sorted && sourceIndex !== storedIndex) return undefined;
+        const memberPath = `${path}.results[${storedIndex}]`;
+        const matcher = new ExpressionMatcher(
+          member.results,
+          `${memberPath}.results`,
+          sorted,
+          flattened,
+        );
+        try {
+          matcher.finish(child);
+          memberScore(member, memberPath);
+          return matcher;
+        } catch (error) {
+          if (!(error instanceof ConversionError)) throw error;
+          if (!sorted) throw error;
+          return undefined;
+        }
+      }),
+    );
+    const edges = candidates.map((row) =>
+      row.map((entry) => entry !== undefined),
+    );
+    const order = matchPermutation(edges);
+    if (!order) fail(path, "Cannot match legacy group members to notation");
+
+    // Search for a materially different compatible assignment, ignoring
+    // interchangeable identical ASTs and identical stored snapshots.
+    if (sorted) {
+      const ambiguous = order.some((storedIndex, sourceIndex) =>
+        edges[sourceIndex]?.some((allowed, alternative) => {
+          if (
+            !allowed ||
+            alternative === storedIndex ||
+            sameData(members[alternative], members[storedIndex])
+          )
+            return false;
+          const otherSource = order.indexOf(alternative);
+          if (
+            sameData(
+              node.expressions[sourceIndex],
+              node.expressions[otherSource],
+            )
+          )
+            return false;
+          return (
+            matchPermutation(
+              edges.map((row, rowIndex) =>
+                row.map(
+                  (edge, column) =>
+                    edge &&
+                    (rowIndex === sourceIndex
+                      ? column === alternative
+                      : column !== alternative),
+                ),
+              ),
+            ) !== undefined
+          );
+        }),
+      );
+      if (ambiguous)
+        this.warnings.push({
+          code: "ambiguous-group-order",
+          path,
+          message:
+            "Sorted legacy members can match multiple notation expressions; using a deterministic compatible assignment",
+        });
+    }
+
+    const scores: Record<number, results.ScoredItem> = {};
+    const notationMembers: LegacyResultGroup[] = [];
+    const orderedIndexes = members.map((_, storedIndex) =>
+      order.indexOf(storedIndex),
+    );
+    this.groups.push({
+      source,
+      path,
+      members: notationMembers,
+      override: { order: orderedIndexes, members: scores },
+    });
+    for (const [sourceIndex, storedIndex] of order.entries()) {
+      const member = members[storedIndex];
+      const matcher = candidates[sourceIndex]?.[storedIndex];
+      if (!member || !matcher) fail(path, "Missing matched group member");
+      notationMembers.push(member);
+      scores[sourceIndex] = memberScore(
+        member,
+        `${path}.results[${storedIndex}]`,
+      );
+      this.pools.push(...matcher.pools);
+      this.groups.push(...matcher.groups);
+      this.warnings.push(...matcher.warnings);
     }
   }
 
@@ -244,15 +429,24 @@ function convertPool(
   node: ast.PoolNode,
   pool: LegacyRollResults,
   path: string,
+  inheritedDrop = false,
 ): readonly ConciseDieResult[] {
   if (!["standard", "percentile", "fudge"].includes(node.die.name)) {
     fail(path, "Unsupported legacy die type");
   }
 
   const qty = parameter(node.qty, `${path}.qty`);
-  for (const [index, arg] of node.die.args.entries()) {
-    parameter(arg, `${path}.die.args[${index}]`);
-  }
+  const args = node.die.args.map((arg, index) =>
+    parameter(arg, `${path}.die.args[${index}]`),
+  );
+  const min = node.die.name === "fudge" ? -1 : 1;
+  const max =
+    node.die.name === "fudge"
+      ? 1
+      : node.die.name === "percentile"
+        ? 100
+        : args[0];
+  if (max === undefined) fail(path, "Missing die sides");
 
   const explode = node.modifiers.find(
     (modifier) => modifier.name === "explode",
@@ -275,35 +469,97 @@ function convertPool(
 
     if (
       !modified &&
-      (die.modifiers.length !== 0 ||
-        die.modifierFlags !== "" ||
-        !die.useInTotal ||
+      (die.modifiers.some((flag) => !inheritedDrop || flag !== "drop") ||
+        (!inheritedDrop && die.modifierFlags !== "") ||
+        (!die.useInTotal &&
+          !(inheritedDrop && die.modifiers.includes("drop"))) ||
         die.value !== die.initialValue ||
         die.value !== die.calculationValue)
     ) {
       fail(diePath, "Unexpected modified die in an unmodified pool");
     }
 
+    if (
+      die.initialValue !== null &&
+      (die.initialValue < min || die.initialValue > max)
+    ) {
+      fail(diePath, "Die value is outside its possible range");
+    }
     return convertDie(die, diePath);
   });
 }
 
-function collectPools(result: results.ExpressionResult): results.PoolResult[] {
-  switch (result.type) {
-    case "pool":
-      return [result];
-    case "binary":
-      return [...collectPools(result.left), ...collectPools(result.right)];
-    case "unary":
-      return collectPools(result.operand);
-    case "paren":
-      return collectPools(result.inner);
-    case "function":
-      return result.args.flatMap(collectPools);
-    case "number":
-      return [];
-    default:
-      fail("data.rolls", `Unsupported reconstructed result: ${result.type}`);
+/** Visit reconstructed results in source order, including reordered groups. */
+function validateRestored(
+  result: results.ExpressionResult,
+  matcher: ExpressionMatcher,
+  context: ConversionContext,
+): void {
+  let poolIndex = 0;
+  let groupIndex = 0;
+
+  function visit(node: results.ExpressionResult): void {
+    switch (node.type) {
+      case "number":
+        return;
+      case "pool": {
+        const source = matcher.pools[poolIndex++];
+        if (!source) fail("data.rolls", "Unexpected reconstructed pool");
+        checkTotal(
+          source.pool.value,
+          node.value,
+          `${source.path}.value`,
+          context,
+        );
+        return;
+      }
+      case "binary":
+        visit(node.left);
+        visit(node.right);
+        return;
+      case "unary":
+        visit(node.operand);
+        return;
+      case "paren":
+        visit(node.inner);
+        return;
+      case "function":
+        node.args.forEach(visit);
+        return;
+      case "group": {
+        const group = matcher.groups[groupIndex++];
+        if (!group) fail("data.rolls", "Unexpected reconstructed group");
+        checkTotal(
+          group.source.value,
+          node.value,
+          `${group.path}.value`,
+          context,
+        );
+        for (const [index, source] of group.members.entries()) {
+          const storedIndex = group.override.order?.indexOf(index) ?? index;
+          const member = node.members[storedIndex];
+          if (!member) fail(group.path, "Missing reconstructed member");
+          checkTotal(
+            source.value,
+            member.result.value,
+            `${group.path}.results[${storedIndex}].value`,
+            context,
+          );
+          visit(member.result);
+        }
+        return;
+      }
+      default:
+        fail("data.rolls", `Unsupported reconstructed result: ${node.type}`);
+    }
+  }
+
+  visit(result);
+  if (
+    poolIndex !== matcher.pools.length ||
+    groupIndex !== matcher.groups.length
+  ) {
+    fail("data.rolls", "Unused reconstructed pools or groups");
   }
 }
 
@@ -336,12 +592,19 @@ function convertRoll(
     );
   }
 
-  const pools = new ExpressionMatcher(data.rolls, `${path}.rolls`).finish(node);
+  const matcher = new ExpressionMatcher(data.rolls, `${path}.rolls`);
+  const pools = matcher.finish(node);
+  matcher.warnings.forEach((warning) => context.warn(warning));
   let roll: Roll;
   try {
     roll = Roll.import({
       notation: data.notation,
       rolls: pools.map((pool) => pool.values),
+      ...(matcher.groups.length && {
+        groups: Object.fromEntries(
+          matcher.groups.map((group, index) => [index, group.override]),
+        ),
+      }),
     });
   } catch (cause) {
     throw new ConversionError(`${path}: Cannot reconstruct legacy dice pool`, {
@@ -349,28 +612,7 @@ function convertRoll(
     });
   }
 
-  const restored = collectPools(roll.result);
-  if (restored.length !== pools.length) {
-    fail(
-      `${path}.rolls`,
-      "Reconstructed pool count does not match legacy data",
-    );
-  }
-  for (const [index, source] of pools.entries()) {
-    const pool = restored[index];
-    if (!pool) fail(source.path, "Missing reconstructed pool");
-
-    const { min, max } = pool.die;
-    for (const [dieIndex, die] of pool.rolls.entries()) {
-      if (die.initialValue < min || die.initialValue > max) {
-        fail(
-          `${source.path}.rolls[${dieIndex}]`,
-          "Die value is outside its possible range",
-        );
-      }
-    }
-    checkTotal(source.pool.value, pool.value, `${source.path}.value`, context);
-  }
+  validateRestored(roll.result, matcher, context);
   checkTotal(data.total, roll.total, `${path}.total`, context);
 
   if (
@@ -390,21 +632,24 @@ function convertRoll(
       minTotal: storedStatistic(
         data.minTotal,
         `${path}.minTotal`,
-        pools.every(({ node }) => node.modifiers.length === 0)
+        matcher.groups.length === 0 &&
+          pools.every(({ node }) => node.modifiers.length === 0)
           ? () => roll.minTotal
           : undefined,
       ),
       maxTotal: storedStatistic(
         data.maxTotal,
         `${path}.maxTotal`,
-        pools.every(({ node }) => node.modifiers.length === 0)
+        matcher.groups.length === 0 &&
+          pools.every(({ node }) => node.modifiers.length === 0)
           ? () => roll.maxTotal
           : undefined,
       ),
       averageTotal: storedStatistic(
         data.averageTotal,
         `${path}.averageTotal`,
-        pools.every(({ node }) => node.modifiers.length === 0)
+        matcher.groups.length === 0 &&
+          pools.every(({ node }) => node.modifiers.length === 0)
           ? () => (roll.minTotal + roll.maxTotal) / 2
           : undefined,
       ),
