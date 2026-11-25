@@ -1,5 +1,6 @@
 export { convert } from "./convert.js";
 export { detectVersion } from "./detectVersion.js";
+export { fromLegacy } from "./fromLegacy.js";
 export {
   ConversionError,
   ConversionPathError,
