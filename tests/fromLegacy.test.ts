@@ -7,7 +7,6 @@ import { DiceRoll } from "rpg-dice-roller-v5";
 import {
   convert,
   fromLegacy,
-  ConversionPathError,
   UnsupportedVersionError,
   VersionDetectionError,
 } from "../src/index.js";
@@ -50,9 +49,8 @@ describe("fromLegacy", () => {
     );
   });
 
-  it("accepts latest but does not invent an unregistered migration", () => {
-    expect(() => fromLegacy(legacy, 1)).toThrow(ConversionPathError);
-    expect(() => fromLegacy(legacy, "latest")).toThrow(ConversionPathError);
+  it("resolves latest to the registered v1 migration", () => {
+    expect(fromLegacy(legacy, "latest")).toEqual(fromLegacy(legacy, 1));
   });
 
   it("rejects unsupported target versions", () => {

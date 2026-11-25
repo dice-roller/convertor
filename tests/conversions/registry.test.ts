@@ -164,11 +164,12 @@ describe("ConversionRegistry", () => {
 });
 
 describe("built-in conversion registry", () => {
-  it("knows legacy and schema 1, without claiming unimplemented migrations", () => {
+  it("registers the forward legacy migration but not a reverse migration", () => {
     expect(conversionRegistry.resolveTarget("latest")).toBe(1);
     expect(conversionRegistry.resolveTarget("legacy")).toBe("legacy");
     expect(conversionRegistry.resolvePath(1, 1)).toEqual([]);
-    expect(() => conversionRegistry.resolvePath("legacy", 1)).toThrow(
+    expect(conversionRegistry.resolvePath("legacy", 1)).toHaveLength(1);
+    expect(() => conversionRegistry.resolvePath(1, "legacy")).toThrow(
       ConversionPathError,
     );
   });

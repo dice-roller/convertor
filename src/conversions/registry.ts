@@ -1,4 +1,5 @@
 import { ConversionPathError, UnsupportedVersionError } from "../errors.js";
+import { legacyToV1 } from "./legacyToV1.js";
 import type {
   ConversionStep,
   DataVersion,
@@ -146,4 +147,4 @@ const versions: readonly SupportedDataVersion[] = ["legacy", 1];
 export const conversionRegistry = new ConversionRegistry<
   SupportedDataVersion,
   RegisteredStep
->(versions, []);
+>(versions, [legacyToV1]);

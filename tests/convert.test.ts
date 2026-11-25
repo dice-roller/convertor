@@ -83,7 +83,6 @@ describe("convert", () => {
   });
 
   it("rejects missing migration paths", () => {
-    expect(() => convert(legacy, 1)).toThrow(ConversionPathError);
     expect(() => convert(current, "legacy")).toThrow(ConversionPathError);
   });
 
