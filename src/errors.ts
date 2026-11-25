@@ -11,3 +11,9 @@ export class InvalidInputError extends ConversionError {}
 
 /** The source schema cannot be identified from the input. */
 export class VersionDetectionError extends ConversionError {}
+
+/** The requested source or target schema is not supported by this release. */
+export class UnsupportedVersionError extends ConversionError {}
+
+/** No registered migration path connects the requested schemas. */
+export class ConversionPathError extends ConversionError {}

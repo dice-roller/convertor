@@ -1,7 +1,9 @@
 export { detectVersion } from "./detectVersion.js";
 export {
   ConversionError,
+  ConversionPathError,
   InvalidInputError,
+  UnsupportedVersionError,
   VersionDetectionError,
 } from "./errors.js";
 export type {
