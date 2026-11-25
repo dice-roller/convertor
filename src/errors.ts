@@ -20,3 +20,6 @@ export class ConversionPathError extends ConversionError {}
 
 /** The requested output encoding is unsupported or serialisation failed. */
 export class OutputEncodingError extends ConversionError {}
+
+/** The requested result structure is not supported for this conversion. */
+export class UnsupportedFormatError extends ConversionError {}

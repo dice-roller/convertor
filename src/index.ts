@@ -1,9 +1,11 @@
+export { convert } from "./convert.js";
 export { detectVersion } from "./detectVersion.js";
 export {
   ConversionError,
   ConversionPathError,
   InvalidInputError,
   OutputEncodingError,
+  UnsupportedFormatError,
   UnsupportedVersionError,
   VersionDetectionError,
 } from "./errors.js";

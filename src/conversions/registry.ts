@@ -134,7 +134,7 @@ export class ConversionRegistry<
 }
 
 /** A union of concrete step contracts, preserving each source/target pairing. */
-type RegisteredStep = {
+export type RegisteredStep = {
   [From in SupportedDataVersion]: {
     [To in Exclude<SupportedDataVersion, From>]: ConversionStep<From, To>;
   }[Exclude<SupportedDataVersion, From>];
