@@ -1,3 +1,9 @@
+export { detectVersion } from "./detectVersion.js";
+export {
+  ConversionError,
+  InvalidInputError,
+  VersionDetectionError,
+} from "./errors.js";
 export type {
   ConversionContext,
   ConversionInput,
