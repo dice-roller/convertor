@@ -22,7 +22,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/dice-roller/convertor.git"
+    "url": "git+https://github.com/dice-roller/convertor.git"
   },
   "bugs": {
     "url": "https://github.com/dice-roller/convertor/issues"
