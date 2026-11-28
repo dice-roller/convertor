@@ -65,7 +65,7 @@ export function convertWithRegistry(
     },
   };
 
-  const prepared = prepareSource(data, source);
+  const prepared = prepareSource(data, source, options.data);
   let full: FullData = prepared.full;
 
   for (const step of path) {
@@ -93,7 +93,11 @@ export function convertWithRegistry(
       );
     }
 
-    return encodeOutput(toConcise(full), target, options.encoding ?? "object");
+    return encodeOutput(
+      toConcise(full, options.data),
+      target,
+      options.encoding ?? "object",
+    );
   }
 
   return encodeOutput(full, target, options.encoding ?? "object");

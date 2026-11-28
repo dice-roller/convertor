@@ -122,6 +122,21 @@ describe("concise output", () => {
     );
   });
 
+  it("round-trips variable-dependent rolls using the original bindings", () => {
+    const data = { bonus: 3 };
+    const original = new Roll("d20+$bonus", { data });
+    const full = original.export();
+    const concise = convert(full, 1, { format: "concise", data });
+
+    expect(concise).not.toHaveProperty("data");
+    expect(Roll.import(concise, { data }).result).toEqual(original.result);
+    expect(convert(concise, 1, { data })).toEqual(full);
+    expect(convert(concise, 1, { format: "concise", data })).toEqual(concise);
+    expect(() =>
+      convert(full, 1, { format: "concise", data: { bonus: 4 } }),
+    ).toThrow(/stored result or total/);
+  });
+
   it("does not require historical statistics to survive concise output", () => {
     const source = new DiceRoll("d6^2").export() as string;
     const full = fromLegacy(source, 1);

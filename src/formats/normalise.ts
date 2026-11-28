@@ -4,6 +4,7 @@ import type {
   EncodedExportData,
   EncodedNumber,
   EncodedRollData,
+  RollInputData,
 } from "@dice-roller/rpg-dice-roller";
 import type { InputData } from "../encoding.js";
 import { InvalidInputError } from "../errors.js";
@@ -31,6 +32,7 @@ function encodeTotal(value: EncodedNumber): EncodedNumber {
 export function prepareSource(
   data: InputData,
   version: SupportedDataVersion,
+  variables?: RollInputData,
 ): PreparedSource {
   try {
     const copy = structuredClone(data);
@@ -62,7 +64,10 @@ export function prepareSource(
 
     if (!Object.hasOwn(copy, "type")) {
       const concise = copy as unknown as ConciseRollData;
-      return { full: Roll.import(concise).export(), concise };
+      return {
+        full: Roll.import(concise, { data: variables }).export(),
+        concise,
+      };
     }
 
     return { full: Roll.import(copy as unknown as EncodedRollData).export() };

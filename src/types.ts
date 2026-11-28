@@ -2,6 +2,7 @@ import type {
   ConciseRollData,
   EncodedExportData,
   ExportFormat,
+  RollInputData,
 } from "@dice-roller/rpg-dice-roller";
 import type { LegacyExportData } from "./formats/legacy.js";
 
@@ -36,6 +37,8 @@ export interface ConversionOptions<
   readonly format?: Format;
   /** The output representation. Defaults to object. */
   readonly encoding?: Encoding;
+  /** Original variable bindings used when reconstructing concise rolls. */
+  readonly data?: RollInputData;
   /** Reject ambiguous or lossy conversions. Defaults to true. */
   readonly strict?: boolean;
   /** Receives recoverable issues when best-effort conversion is enabled. */

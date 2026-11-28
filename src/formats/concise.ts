@@ -4,6 +4,7 @@ import type {
   ConciseGroupResult,
   ConciseRollData,
   EncodedRollData,
+  RollInputData,
   results,
 } from "@dice-roller/rpg-dice-roller";
 import { UnsupportedFormatError } from "../errors.js";
@@ -65,8 +66,11 @@ function memberScore(
 /** Produce concise data in evaluator encounter order and verify it restores
  * the same result tree. Statistics are intentionally not part of this format.
  */
-export function toConcise(data: EncodedRollData): ConciseRollData {
-  const original = Roll.import(data);
+export function toConcise(
+  full: EncodedRollData,
+  data?: RollInputData,
+): ConciseRollData {
+  const original = Roll.import(full);
   const rolls: ConciseDieResult[][] = [];
   const groups: Record<number, ConciseGroupResult> = {};
   let groupIndex = 0;
@@ -140,14 +144,14 @@ export function toConcise(data: EncodedRollData): ConciseRollData {
 
   visit(original.result);
   const concise: ConciseRollData = {
-    notation: data.notation,
+    notation: full.notation,
     rolls,
     ...(Object.keys(groups).length > 0 && { groups }),
   };
 
   let reconstructed: Roll;
   try {
-    reconstructed = Roll.import(concise);
+    reconstructed = Roll.import(concise, { data });
   } catch (cause) {
     throw new UnsupportedFormatError(
       "The full roll cannot be reconstructed from concise data",

@@ -109,6 +109,17 @@ Or convert a full v6 export to concise data:
 const concise = convert(v6RollData, 1, { format: "concise" });
 ```
 
+For notation that uses variables, pass the original bindings as `data`. The
+convertor uses them to validate or reconstruct concise data. Supply the same
+bindings when importing the concise output.
+
+```js
+const data = { bonus: 3 };
+const original = new Roll("d20+$bonus", { data });
+const concise = convert(original.export(), 1, { format: "concise", data });
+const restored = Roll.import(concise, { data });
+```
+
 Concise data preserves notation, finished dice, scoring, flags and group order, but does not store historical minimum, maximum or average totals. Those statistics are calculated by v6 on import. Use full output to preserve them. The convertor checks that concise output reconstructs the same result tree and total; exports depending on unavailable caller data or custom dice factories may not be representable. A history cannot be exported in concise format; convert its individual rolls instead.
 
 See the [Dice Roller documentation](https://dice-roller.github.io/documentation/) for the notation and import formats.
